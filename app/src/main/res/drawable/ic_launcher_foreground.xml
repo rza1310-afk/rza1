@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer chamfered sci-fi HUD octagon frame strictly inside 66dp safe zone (27..81) -->
+    <path
+        android:fillColor="#091D2A"
+        android:pathData="M34,27 L74,27 L81,34 L81,74 L74,81 L34,81 L27,74 L27,34 Z"
+        android:strokeWidth="3.2"
+        android:strokeColor="#AAE8FF" />
+    <!-- Bold terminal chevron > -->
+    <path
+        android:fillColor="#AAE8FF"
+        android:pathData="M37,41 L54,54 L37,67 L42.5,67 L58.5,54 L42.5,41 Z" />
+    <!-- Bold terminal cursor bar _ -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M56,62 L71,62 L71,67 L56,67 Z" />
+</vector>

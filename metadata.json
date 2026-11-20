@@ -1,0 +1,8 @@
+{
+  "name": "aRDEX-UI",
+  "description": "Sci-fi fullscreen terminal emulator, real-time Android system telemetry HUD, 3D network globe, and filesystem explorer inspired by eDEX-UI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
