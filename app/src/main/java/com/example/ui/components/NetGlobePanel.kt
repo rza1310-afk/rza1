@@ -7,7 +7,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,15 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CutCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.NetworkPing
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
@@ -52,14 +43,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.example.R
-import com.example.model.GlobeNodeFilter
 import com.example.model.NetworkConnectionNode
 import com.example.model.SystemTelemetry
 import com.example.ui.theme.LocalEdexPalette
@@ -70,25 +56,13 @@ fun NetGlobePanel(
   telemetry: SystemTelemetry,
   modifier: Modifier = Modifier,
   isServiceRunning: Boolean = true,
-  selectedNodeId: String? = null,
-  nodeFilter: GlobeNodeFilter = GlobeNodeFilter.ALL,
-  onSelectNode: (String?) -> Unit = {},
-  onSelectFilter: (GlobeNodeFilter) -> Unit = {},
-  onProbeNode: (NetworkConnectionNode) -> Unit = {},
-  onRunNetDiagnostic: () -> Unit = {},
   onGlobeTap: () -> Unit = {},
   onGlobeReset: () -> Unit = {},
 ) {
   val palette = LocalEdexPalette.current
-  val clipboard = LocalClipboardManager.current
   val livePacketBlink =
     isServiceRunning && telemetry.networkConnected && telemetry.packetTrafficActive
-  var copiedFeedback by remember(selectedNodeId) { mutableStateOf(false) }
-
-  val filteredConnections =
-    remember(telemetry.activeConnections, nodeFilter) {
-      filterGlobeConnections(telemetry.activeConnections, nodeFilter)
-    }
+  var selectedNodeId by remember { mutableStateOf<String?>(null) }
 
   val selectedNode =
     remember(telemetry.activeConnections, selectedNodeId) {
@@ -100,7 +74,7 @@ fun NetGlobePanel(
       !isServiceRunning -> "SVC PAUSED"
       !telemetry.networkConnected -> "OFFLINE"
       telemetry.packetTrafficActive -> "PKT ${telemetry.packetsPerSec}/s"
-      else -> "IDLE • ${filteredConnections.size} NODES"
+      else -> "IDLE • ${telemetry.activeConnections.size} NODES"
     }
   val statusColor =
     when {
@@ -125,16 +99,18 @@ fun NetGlobePanel(
     ) {
       WireframeGlobeCanvas(
         networkConnected = telemetry.networkConnected,
-        connections = filteredConnections,
+        connections = telemetry.activeConnections,
         packetTrafficActive = livePacketBlink,
         packetIntensity = telemetry.packetIntensity,
         rxSpeedKbps = telemetry.rxSpeedKbps,
         txSpeedKbps = telemetry.txSpeedKbps,
         selectedNodeId = selectedNode?.id,
-        onSelectNode = onSelectNode,
         modifier = Modifier.fillMaxSize(),
         onGlobeTap = onGlobeTap,
-        onGlobeReset = onGlobeReset,
+        onGlobeReset = {
+          selectedNodeId = null
+          onGlobeReset()
+        },
       )
 
       Text(
@@ -165,45 +141,14 @@ fun NetGlobePanel(
       }
 
       Text(
-        text = "TAP NODE • DRAG",
+        text = "DRAG • TAP PAUSE",
         style = MaterialTheme.typography.labelSmall,
         color = palette.textMuted.copy(alpha = 0.75f),
         modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
       )
     }
 
-    Spacer(modifier = Modifier.height(6.dp))
-
-    // Node Filter Bar
-    Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      GlobeNodeFilter.entries.forEach { mode ->
-        val selected = nodeFilter == mode
-        Surface(
-          modifier =
-            Modifier.minimumInteractiveComponentSize()
-              .testTag("globe_filter_${mode.name.lowercase()}")
-              .clickable { onSelectFilter(mode) },
-          color =
-            if (selected) palette.primaryDim.copy(alpha = 0.7f)
-            else palette.background.copy(alpha = 0.65f),
-          border = BorderStroke(1.dp, if (selected) palette.primaryBright else palette.gridLine),
-          shape = CutCornerShape(4.dp),
-        ) {
-          Text(
-            text = mode.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) palette.primaryBright else palette.textMuted,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-          )
-        }
-      }
-    }
-
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(8.dp))
 
     // Live RX / TX Throughput Dual Chart
     Row(
@@ -246,148 +191,55 @@ fun NetGlobePanel(
       ),
     )
 
-    if (filteredConnections.isNotEmpty()) {
+    if (telemetry.activeConnections.isNotEmpty()) {
       Spacer(modifier = Modifier.height(6.dp))
       ActiveConnectionsStrip(
-        connections = filteredConnections,
+        connections = telemetry.activeConnections,
         selectedNodeId = selectedNode?.id,
         blinking = livePacketBlink,
         onSelectNode = { node ->
           onGlobeTap()
-          onSelectNode(if (selectedNodeId == node.id) null else node.id)
+          selectedNodeId = if (selectedNodeId == node.id) null else node.id
         },
       )
       AnimatedVisibility(visible = selectedNode != null) {
         selectedNode?.let { node ->
-          Column(
+          Spacer(modifier = Modifier.height(4.dp))
+          Row(
             modifier =
               Modifier.fillMaxWidth()
-                .padding(top = 6.dp)
-                .background(palette.surfaceElevated.copy(alpha = 0.85f), CutCornerShape(6.dp))
-                .border(1.dp, palette.primaryBright.copy(alpha = 0.7f), CutCornerShape(6.dp))
-                .padding(8.dp)
+                .background(palette.surfaceElevated.copy(alpha = 0.7f), CutCornerShape(4.dp))
+                .border(1.dp, palette.primaryBright.copy(alpha = 0.5f), CutCornerShape(4.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
                 .testTag("globe_selected_node_detail"),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = "${node.protocol} // ${node.endpoint}",
-                  style = MaterialTheme.typography.labelMedium,
-                  color = palette.primaryBright,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                  text =
-                    String.format(
-                      Locale.US,
-                      "STATE %s • LAT %.1f° LON %.1f°",
-                      node.state,
-                      node.latDeg,
-                      node.lonDeg,
-                    ),
-                  style = MaterialTheme.typography.labelSmall,
-                  color = palette.textMuted,
-                  maxLines = 1,
-                )
-              }
-              IconButton(
-                onClick = { onSelectNode(null) },
-                modifier = Modifier.minimumInteractiveComponentSize().testTag("globe_clear_node_button"),
-              ) {
-                Icon(
-                  imageVector = Icons.Filled.Close,
-                  contentDescription = stringResource(R.string.cd_close_dialog),
-                  tint = palette.textMuted,
-                  modifier = Modifier.size(16.dp),
-                )
-              }
-            }
-            Row(
-              modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-              InspectorActionButton(
-                label = stringResource(R.string.globe_probe_ping),
-                icon = Icons.Filled.NetworkPing,
-                accent = palette.success,
-                onClick = { onProbeNode(node) },
-                testTag = "globe_probe_ping_button",
-              )
-              InspectorActionButton(
-                label = stringResource(R.string.globe_net_diag),
-                icon = Icons.Filled.Terminal,
-                accent = palette.primary,
-                onClick = onRunNetDiagnostic,
-                testTag = "globe_ifconfig_button",
-              )
-              InspectorActionButton(
-                label = if (copiedFeedback) "COPIED" else stringResource(R.string.globe_copy_ip),
-                icon = Icons.Filled.ContentCopy,
-                accent = palette.secondary,
-                onClick = {
-                  clipboard.setText(AnnotatedString(node.endpoint))
-                  copiedFeedback = true
-                  onGlobeTap()
-                },
-                testTag = "globe_copy_ip_button",
-              )
-            }
+            Text(
+              text = "${node.protocol} ${node.endpoint}",
+              style = MaterialTheme.typography.labelSmall,
+              color = palette.primaryBright,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text =
+                String.format(
+                  Locale.US,
+                  "%s • %.1f°, %.1f°",
+                  node.state,
+                  node.latDeg,
+                  node.lonDeg,
+                ),
+              style = MaterialTheme.typography.labelSmall,
+              color = palette.textMuted,
+              maxLines = 1,
+            )
           }
         }
       }
-    }
-  }
-}
-
-internal fun filterGlobeConnections(
-  connections: List<NetworkConnectionNode>,
-  filter: GlobeNodeFilter,
-): List<NetworkConnectionNode> =
-  when (filter) {
-    GlobeNodeFilter.ALL -> connections
-    GlobeNodeFilter.SOCKETS ->
-      connections.filter { it.isOrigin || it.protocol == "TCP" || it.protocol == "UDP" }
-    GlobeNodeFilter.GW_DNS ->
-      connections.filter { it.isOrigin || it.protocol == "GW" || it.protocol == "DNS" }
-  }
-
-@Composable
-private fun InspectorActionButton(
-  label: String,
-  icon: androidx.compose.ui.graphics.vector.ImageVector,
-  accent: Color,
-  onClick: () -> Unit,
-  testTag: String,
-) {
-  val shape = CutCornerShape(4.dp)
-  Surface(
-    modifier =
-      Modifier.minimumInteractiveComponentSize()
-        .clip(shape)
-        .testTag(testTag)
-        .clickable(onClick = onClick),
-    color = accent.copy(alpha = 0.14f),
-    border = BorderStroke(1.dp, accent),
-    shape = shape,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = label,
-        tint = accent,
-        modifier = Modifier.size(14.dp),
-      )
-      Spacer(modifier = Modifier.width(5.dp))
-      Text(text = label, style = MaterialTheme.typography.labelSmall, color = accent, maxLines = 1)
     }
   }
 }

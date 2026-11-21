@@ -66,8 +66,6 @@ import com.example.ui.components.EdexTopHeaderBar
 import com.example.ui.components.FileInspectorDialog
 import com.example.ui.components.FilesystemPanel
 import com.example.ui.components.HudGlitchShaderContainer
-import com.example.ui.components.MacroConfirmDialog
-import com.example.ui.components.MacroEditorDialog
 import com.example.ui.components.MemoryAndStoragePanel
 import com.example.ui.components.NetGlobePanel
 import com.example.ui.components.NewFileEntryDialog
@@ -105,10 +103,6 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
   val inspectedFile by viewModel.inspectedFile.collectAsStateWithLifecycle()
   val showSettings by viewModel.showSettingsDialog.collectAsStateWithLifecycle()
   val showNewFile by viewModel.showNewFileDialog.collectAsStateWithLifecycle()
-  val selectedGlobeNodeId by viewModel.selectedGlobeNodeId.collectAsStateWithLifecycle()
-  val globeNodeFilter by viewModel.globeNodeFilter.collectAsStateWithLifecycle()
-  val editingMacroState by viewModel.editingMacroState.collectAsStateWithLifecycle()
-  val pendingMacroConfirm by viewModel.pendingMacroConfirm.collectAsStateWithLifecycle()
 
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
@@ -248,15 +242,10 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                   onClearTerminal = viewModel::clearActiveTerminal,
                   onInputChange = viewModel::updateTerminalInput,
                   onSubmitCommand = viewModel::submitCurrentInput,
+                  onQuickCommand = viewModel::runCommand,
                   onHistoryUp = viewModel::historyUp,
                   onHistoryDown = viewModel::historyDown,
                   modifier = Modifier.weight(1f).fillMaxWidth(),
-                  macroDecks = prefs.macroDecks,
-                  activeMacroDeckId = prefs.activeMacroDeckId,
-                  onSelectMacroDeck = viewModel::selectMacroDeck,
-                  onRunMacro = viewModel::triggerMacro,
-                  onAddMacro = viewModel::openAddMacroDialog,
-                  onEditMacro = viewModel::openEditMacroDialog,
                   onScrollToLatest = viewModel::onTerminalScrollToLatest,
                 )
                 AnimatedVisibility(visible = prefs.showKeyboard) {
@@ -286,12 +275,6 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                     NetGlobePanel(
                       telemetry = telemetry,
                       isServiceRunning = isServiceRunning,
-                      selectedNodeId = selectedGlobeNodeId,
-                      nodeFilter = globeNodeFilter,
-                      onSelectNode = viewModel::selectGlobeNode,
-                      onSelectFilter = viewModel::selectGlobeNodeFilter,
-                      onProbeNode = viewModel::probeGlobeNode,
-                      onRunNetDiagnostic = viewModel::runNetworkDiagnostic,
                       onGlobeTap = viewModel::onGlobeTap,
                       onGlobeReset = viewModel::onGlobeReset,
                     )
@@ -354,15 +337,10 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                       onClearTerminal = viewModel::clearActiveTerminal,
                       onInputChange = viewModel::updateTerminalInput,
                       onSubmitCommand = viewModel::submitCurrentInput,
+                      onQuickCommand = viewModel::runCommand,
                       onHistoryUp = viewModel::historyUp,
                       onHistoryDown = viewModel::historyDown,
                       modifier = Modifier.weight(1f).fillMaxWidth(),
-                      macroDecks = prefs.macroDecks,
-                      activeMacroDeckId = prefs.activeMacroDeckId,
-                      onSelectMacroDeck = viewModel::selectMacroDeck,
-                      onRunMacro = viewModel::triggerMacro,
-                      onAddMacro = viewModel::openAddMacroDialog,
-                      onEditMacro = viewModel::openEditMacroDialog,
                       onScrollToLatest = viewModel::onTerminalScrollToLatest,
                     )
                     AnimatedVisibility(visible = prefs.showKeyboard) {
@@ -431,12 +409,6 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                         NetGlobePanel(
                           telemetry = telemetry,
                           isServiceRunning = isServiceRunning,
-                          selectedNodeId = selectedGlobeNodeId,
-                          nodeFilter = globeNodeFilter,
-                          onSelectNode = viewModel::selectGlobeNode,
-                          onSelectFilter = viewModel::selectGlobeNodeFilter,
-                          onProbeNode = viewModel::probeGlobeNode,
-                          onRunNetDiagnostic = viewModel::runNetworkDiagnostic,
                           onGlobeTap = viewModel::onGlobeTap,
                           onGlobeReset = viewModel::onGlobeReset,
                         )
@@ -514,9 +486,6 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
           isTelemetryServiceRunning = isServiceRunning,
           onSelectTheme = viewModel::setTheme,
           onSelectTelemetryTheme = viewModel::setTelemetryTheme,
-          onApplyHudProfile = viewModel::applyHudProfile,
-          onSaveCurrentHudProfile = viewModel::saveCurrentAsHudProfile,
-          onDeleteHudProfile = viewModel::deleteHudProfile,
           onToggleSound = viewModel::toggleSound,
           onToggleScanlines = viewModel::toggleScanlines,
           onToggleKeyboard = viewModel::toggleKeyboard,
@@ -525,25 +494,6 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
           onChangeGlitchThreshold = viewModel::setGlitchLoadThreshold,
           onReplayBoot = viewModel::replayBoot,
           onDismiss = viewModel::closeSettings,
-        )
-      }
-
-      editingMacroState?.let { editor ->
-        MacroEditorDialog(
-          initialMacro = editor.existingMacro,
-          deckName = editor.deckName,
-          onSave = viewModel::saveMacro,
-          onDelete = if (editor.existingMacro != null) viewModel::deleteEditingMacro else null,
-          onDismiss = viewModel::dismissMacroEditor,
-        )
-      }
-
-      pendingMacroConfirm?.let { pending ->
-        MacroConfirmDialog(
-          macro = pending.macro,
-          resolvedCommand = pending.resolvedCommand,
-          onConfirm = viewModel::confirmPendingMacro,
-          onDismiss = viewModel::dismissPendingMacro,
         )
       }
     }

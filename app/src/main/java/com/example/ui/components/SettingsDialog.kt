@@ -45,7 +45,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.model.EdexUserPreferences
-import com.example.model.HudProfile
 import com.example.ui.theme.EdexPalettes
 import com.example.ui.theme.EdexThemeId
 import com.example.ui.theme.LocalEdexPalette
@@ -57,9 +56,6 @@ fun SettingsDialog(
   isTelemetryServiceRunning: Boolean,
   onSelectTheme: (EdexThemeId) -> Unit,
   onSelectTelemetryTheme: (TelemetryThemeId) -> Unit,
-  onApplyHudProfile: (HudProfile) -> Unit = {},
-  onSaveCurrentHudProfile: (String) -> Unit = {},
-  onDeleteHudProfile: (HudProfile) -> Unit = {},
   onToggleSound: () -> Unit,
   onToggleScanlines: () -> Unit,
   onToggleKeyboard: () -> Unit,
@@ -106,14 +102,6 @@ fun SettingsDialog(
             )
           }
         }
-
-        HudProfilesSection(
-          profiles = preferences.hudProfiles,
-          activeProfileId = preferences.activeHudProfileId,
-          onApplyProfile = onApplyHudProfile,
-          onSaveCurrentProfile = onSaveCurrentHudProfile,
-          onDeleteProfile = onDeleteHudProfile,
-        )
 
         Text(
           text = stringResource(R.string.settings_theme_label),

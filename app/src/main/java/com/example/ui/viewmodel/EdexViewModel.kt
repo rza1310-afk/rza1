@@ -14,17 +14,11 @@ import com.example.data.createWelcomeTerminalLines
 import com.example.model.EdexSectionTab
 import com.example.model.EdexUserPreferences
 import com.example.model.FileItem
-import com.example.model.GlobeNodeFilter
-import com.example.model.HudProfile
-import com.example.model.MacroAccentRole
-import com.example.model.NetworkConnectionNode
-import com.example.model.ShellMacro
 import com.example.model.SystemTelemetry
 import com.example.model.TerminalLine
 import com.example.model.TerminalLineType
 import com.example.model.TerminalTab
 import com.example.service.TelemetryMonitorService
-import com.example.ui.components.filterGlobeConnections
 import com.example.ui.theme.EdexThemeId
 import com.example.ui.theme.TelemetryThemeId
 import java.io.File
@@ -114,18 +108,6 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
 
   private val _streamSystemLogs = MutableStateFlow(true)
   val streamSystemLogs: StateFlow<Boolean> = _streamSystemLogs.asStateFlow()
-
-  private val _selectedGlobeNodeId = MutableStateFlow<String?>(null)
-  val selectedGlobeNodeId: StateFlow<String?> = _selectedGlobeNodeId.asStateFlow()
-
-  private val _globeNodeFilter = MutableStateFlow(GlobeNodeFilter.ALL)
-  val globeNodeFilter: StateFlow<GlobeNodeFilter> = _globeNodeFilter.asStateFlow()
-
-  private val _editingMacroState = MutableStateFlow<MacroEditorState?>(null)
-  val editingMacroState: StateFlow<MacroEditorState?> = _editingMacroState.asStateFlow()
-
-  private val _pendingMacroConfirm = MutableStateFlow<PendingMacroConfirm?>(null)
-  val pendingMacroConfirm: StateFlow<PendingMacroConfirm?> = _pendingMacroConfirm.asStateFlow()
 
   private var historyCursor: Int = -1
 
@@ -450,163 +432,6 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
 
   fun onGlobeReset() {
     soundManager.playDataProcess()
-  }
-
-  fun selectGlobeNode(nodeId: String?) {
-    soundManager.playUiSwitch()
-    _selectedGlobeNodeId.value = nodeId
-  }
-
-  fun selectGlobeNodeFilter(filter: GlobeNodeFilter) {
-    soundManager.playUiSwitch()
-    _globeNodeFilter.value = filter
-    val currentSelected = _selectedGlobeNodeId.value
-    if (currentSelected != null) {
-      val stillVisible =
-        filterGlobeConnections(telemetry.value.activeConnections, filter).any {
-          it.id == currentSelected
-        }
-      if (!stillVisible) {
-        _selectedGlobeNodeId.value = null
-      }
-    }
-  }
-
-  fun probeGlobeNode(node: NetworkConnectionNode) {
-    val host = extractHostFromEndpoint(node.endpoint)
-    _activeSection.value = EdexSectionTab.TERMINAL
-    runCommand("ping $host")
-  }
-
-  fun runNetworkDiagnostic() {
-    _activeSection.value = EdexSectionTab.TERMINAL
-    runCommand("ifconfig")
-  }
-
-  fun selectMacroDeck(deckId: String) {
-    soundManager.playUiSwitch()
-    viewModelScope.launch { prefsRepo.setActiveMacroDeck(deckId) }
-  }
-
-  fun resolveMacroCommand(template: String): String {
-    val selectedNode =
-      _selectedGlobeNodeId.value?.let { id ->
-        telemetry.value.activeConnections.firstOrNull { it.id == id }
-      }
-    val activeCwd =
-      _tabs.value.getOrNull(_activeTabIndex.value)?.cwd ?: filesystemRepo.workspaceRoot.absolutePath
-    return resolveMacroTokens(
-      template = template,
-      selectedNode = selectedNode,
-      gatewayIp = telemetry.value.gatewayIp,
-      cwd = activeCwd,
-      interfaceName = telemetry.value.interfaceName,
-    )
-  }
-
-  fun triggerMacro(macro: ShellMacro) {
-    val resolved = resolveMacroCommand(macro.commandTemplate)
-    if (resolved.isEmpty()) return
-    if (macro.requiresConfirm) {
-      soundManager.playUiSwitch()
-      _pendingMacroConfirm.value = PendingMacroConfirm(macro = macro, resolvedCommand = resolved)
-    } else {
-      runCommand(resolved)
-    }
-  }
-
-  fun confirmPendingMacro() {
-    val pending = _pendingMacroConfirm.value ?: return
-    _pendingMacroConfirm.value = null
-    runCommand(pending.resolvedCommand)
-  }
-
-  fun dismissPendingMacro() {
-    soundManager.playUiSwitch()
-    _pendingMacroConfirm.value = null
-  }
-
-  fun openAddMacroDialog() {
-    val prefs = preferences.value
-    val deck =
-      prefs.macroDecks.firstOrNull { it.id == prefs.activeMacroDeckId } ?: prefs.macroDecks.firstOrNull()
-        ?: return
-    soundManager.playUiSwitch()
-    _editingMacroState.value = MacroEditorState(deckId = deck.id, deckName = deck.name, existingMacro = null)
-  }
-
-  fun openEditMacroDialog(macro: ShellMacro) {
-    val prefs = preferences.value
-    val deck =
-      prefs.macroDecks.firstOrNull { d -> d.macros.any { it.id == macro.id } }
-        ?: prefs.macroDecks.firstOrNull { it.id == prefs.activeMacroDeckId }
-        ?: return
-    soundManager.playUiSwitch()
-    _editingMacroState.value = MacroEditorState(deckId = deck.id, deckName = deck.name, existingMacro = macro)
-  }
-
-  fun dismissMacroEditor() {
-    soundManager.playUiSwitch()
-    _editingMacroState.value = null
-  }
-
-  fun saveMacro(
-    label: String,
-    commandTemplate: String,
-    requiresConfirm: Boolean,
-    accentRole: MacroAccentRole,
-  ) {
-    val editor = _editingMacroState.value ?: return
-    val updated =
-      upsertMacroInDecks(
-        decks = preferences.value.macroDecks,
-        deckId = editor.deckId,
-        existingMacroId = editor.existingMacro?.id,
-        label = label,
-        commandTemplate = commandTemplate,
-        requiresConfirm = requiresConfirm,
-        accentRole = accentRole,
-        newIdGenerator = { "m_${lineIdGenerator.incrementAndGet()}" },
-      )
-    _editingMacroState.value = null
-    soundManager.playDataProcess()
-    viewModelScope.launch { prefsRepo.saveMacroDecks(updated, editor.deckId) }
-  }
-
-  fun deleteEditingMacro() {
-    val editor = _editingMacroState.value ?: return
-    val existing = editor.existingMacro ?: return
-    val updated = deleteMacroFromDecks(preferences.value.macroDecks, editor.deckId, existing.id)
-    _editingMacroState.value = null
-    soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.saveMacroDecks(updated, editor.deckId) }
-  }
-
-  fun applyHudProfile(profile: HudProfile) {
-    soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.applyHudProfile(profile) }
-  }
-
-  fun saveCurrentAsHudProfile(name: String) {
-    val trimmed = name.trim()
-    if (trimmed.isEmpty()) return
-    val prefs = preferences.value
-    val newProfile =
-      createHudProfileSnapshot(
-        id = "prof_${lineIdGenerator.incrementAndGet()}_${System.currentTimeMillis()}",
-        name = trimmed,
-        prefs = prefs,
-      )
-    val updated = prefs.hudProfiles + newProfile
-    soundManager.playDataProcess()
-    viewModelScope.launch { prefsRepo.saveHudProfiles(updated, activeProfileId = newProfile.id) }
-  }
-
-  fun deleteHudProfile(profile: HudProfile) {
-    if (profile.isBuiltIn) return
-    val updated = preferences.value.hudProfiles.filterNot { it.id == profile.id }
-    soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.saveHudProfiles(updated) }
   }
 
   fun onFileFilterChanged() {

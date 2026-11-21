@@ -16,7 +16,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -29,7 +28,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -60,13 +58,11 @@ fun WireframeGlobeCanvas(
   rxSpeedKbps: Float = 0f,
   txSpeedKbps: Float = 0f,
   selectedNodeId: String? = null,
-  onSelectNode: (String?) -> Unit = {},
   onGlobeTap: () -> Unit = {},
   onGlobeReset: () -> Unit = {},
 ) {
   val palette = LocalEdexPalette.current
   val textMeasurer = rememberTextMeasurer()
-  val hitRadiusPx = with(LocalDensity.current) { 26.dp.toPx() }
 
   val activeNodes =
     remember(connections, networkConnected) {
@@ -85,12 +81,6 @@ fun WireframeGlobeCanvas(
         node to latLonToVec3(node.latDeg * PI / 180.0, node.lonDeg * PI / 180.0)
       }
     }
-
-  val latestNodeVectors by rememberUpdatedState(nodeVectors)
-  val latestSelectedId by rememberUpdatedState(selectedNodeId)
-  val latestOnSelectNode by rememberUpdatedState(onSelectNode)
-  val latestOnGlobeTap by rememberUpdatedState(onGlobeTap)
-  val latestOnGlobeReset by rememberUpdatedState(onGlobeReset)
 
   val defaultYaw =
     remember(activeNodes.firstOrNull()?.lonDeg) {
@@ -142,7 +132,7 @@ fun WireframeGlobeCanvas(
       label = "beacon_pulse",
     )
 
-  // Smoothly focus camera onto a selected connection node
+  // Smoothly focus camera onto a selected connection node when clicked in the HUD strip
   LaunchedEffect(selectedNodeId) {
     val targetNode = activeNodes.firstOrNull { it.id == selectedNodeId } ?: return@LaunchedEffect
     autoRotate = false
@@ -187,44 +177,17 @@ fun WireframeGlobeCanvas(
             pitchRad = (pitchRad + dragAmount.y * 0.006f).coerceIn(-1.15f, 1.15f)
           }
         }
-        .pointerInput(defaultYaw, hitRadiusPx) {
+        .pointerInput(defaultYaw) {
           detectTapGestures(
-            onTap = { tapOffset ->
-              val cx = size.width / 2f
-              val cy = size.height / 2f
-              val radius = minOf(size.width, size.height) * 0.40f
-              val hitNode =
-                if (radius > 1f) {
-                  findNearestVisibleNode(
-                    tapOffset = tapOffset,
-                    nodeVectors = latestNodeVectors,
-                    yawRad = yawRad,
-                    pitchRad = pitchRad,
-                    rollRad = rollRad,
-                    cx = cx,
-                    cy = cy,
-                    radius = radius,
-                    maxDistancePx = hitRadiusPx,
-                  )
-                } else {
-                  null
-                }
-              if (hitNode != null) {
-                autoRotate = false
-                val nextId = if (latestSelectedId == hitNode.id) null else hitNode.id
-                latestOnSelectNode(nextId)
-                latestOnGlobeTap()
-              } else {
-                autoRotate = !autoRotate
-                latestOnGlobeTap()
-              }
+            onTap = {
+              autoRotate = !autoRotate
+              onGlobeTap()
             },
             onDoubleTap = {
               yawRad = defaultYaw
               pitchRad = 0.28f
               autoRotate = true
-              latestOnSelectNode(null)
-              latestOnGlobeReset()
+              onGlobeReset()
             },
           )
         }
@@ -317,7 +280,8 @@ fun WireframeGlobeCanvas(
         val isFocused = selectedNodeId != null && peerNode.id == selectedNodeId
         val steps = 16
         var prevArc: Vec3? = null
-        val arcAlpha = (if (isFocused) 0.78f else 0.30f) + 0.42f * trafficBlend
+        val arcAlpha =
+          (if (isFocused) 0.75f else 0.30f) + 0.42f * trafficBlend
         for (s in 0..steps) {
           val t = s.toFloat() / steps
           val arcBase = slerpNormalized(originVec, peerVec, t)
@@ -332,7 +296,7 @@ fun WireframeGlobeCanvas(
                 ),
               start = Offset(cx + prevArc.x * radius, cy - prevArc.y * radius),
               end = Offset(cx + rotated.x * radius, cy - rotated.y * radius),
-              strokeWidth = ((if (isFocused) 1.8f else 1.1f) + 0.6f * trafficBlend).dp.toPx(),
+              strokeWidth = ((if (isFocused) 1.7f else 1.1f) + 0.6f * trafficBlend).dp.toPx(),
               cap = StrokeCap.Round,
             )
           }
@@ -416,7 +380,7 @@ fun WireframeGlobeCanvas(
       val blinkStrength = sharpBlink * trafficBlend * node.trafficWeight.coerceIn(0.45f, 1f)
 
       val glowRadiusPx =
-        ((6.5f + 2.0f * ambientBreath + 10.5f * blinkStrength + (if (isSelected) 4.5f else 0f)) *
+        ((6.5f + 2.0f * ambientBreath + 10.5f * blinkStrength + (if (isSelected) 4.0f else 0f)) *
             (if (node.isOrigin) 1.24f else 1.0f))
           .dp
           .toPx()
@@ -460,9 +424,8 @@ fun WireframeGlobeCanvas(
 
       // Precision targeting crosshair on local origin or selected node
       if ((node.isOrigin || isSelected) && pt.z > 0.05f) {
-        val bracketR = (if (isSelected) 8.0f else 5.8f).dp.toPx()
-        val bracketColor =
-          (if (isSelected) palette.success else palette.primaryBright).copy(alpha = 0.80f * depthAlpha)
+        val bracketR = (if (isSelected) 7.5f else 5.8f).dp.toPx()
+        val bracketColor = (if (isSelected) palette.success else palette.primaryBright).copy(alpha = 0.75f * depthAlpha)
         drawLine(bracketColor, Offset(pos.x - bracketR, pos.y), Offset(pos.x - bracketR * 0.45f, pos.y), 1.dp.toPx())
         drawLine(bracketColor, Offset(pos.x + bracketR * 0.45f, pos.y), Offset(pos.x + bracketR, pos.y), 1.dp.toPx())
         drawLine(bracketColor, Offset(pos.x, pos.y - bracketR), Offset(pos.x, pos.y - bracketR * 0.45f), 1.dp.toPx())
@@ -509,33 +472,6 @@ fun WireframeGlobeCanvas(
       }
     }
   }
-}
-
-internal fun findNearestVisibleNode(
-  tapOffset: Offset,
-  nodeVectors: List<Pair<NetworkConnectionNode, Vec3>>,
-  yawRad: Float,
-  pitchRad: Float,
-  rollRad: Float,
-  cx: Float,
-  cy: Float,
-  radius: Float,
-  maxDistancePx: Float,
-): NetworkConnectionNode? {
-  var bestNode: NetworkConnectionNode? = null
-  var bestDist = maxDistancePx
-  for ((node, vec) in nodeVectors) {
-    val pt = rotatePoint3D(vec, yawRad, pitchRad, rollRad)
-    if (pt.z <= -0.10f) continue
-    val screenX = cx + pt.x * radius
-    val screenY = cy - pt.y * radius
-    val dist = hypot(tapOffset.x - screenX, tapOffset.y - screenY)
-    if (dist <= bestDist) {
-      bestDist = dist
-      bestNode = node
-    }
-  }
-  return bestNode
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArcPacketPulse(
@@ -585,7 +521,7 @@ private fun latLonToVec3(lat: Double, lon: Double): Vec3 {
 }
 
 /** Applies 3D rotation matrix transformations: Yaw (Y-axis) -> Pitch (X-axis) -> Roll (Z-axis). */
-internal fun rotatePoint3D(v: Vec3, yaw: Float, pitch: Float, roll: Float): Vec3 {
+private fun rotatePoint3D(v: Vec3, yaw: Float, pitch: Float, roll: Float): Vec3 {
   val cy = cos(yaw)
   val sy = sin(yaw)
   val x1 = v.x * cy - v.z * sy
