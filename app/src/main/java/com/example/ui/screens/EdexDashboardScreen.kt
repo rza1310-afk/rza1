@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -46,9 +45,11 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -66,6 +67,8 @@ import com.example.ui.components.EdexTopHeaderBar
 import com.example.ui.components.FileInspectorDialog
 import com.example.ui.components.FilesystemPanel
 import com.example.ui.components.HudGlitchShaderContainer
+import com.example.ui.components.MacroConfirmDialog
+import com.example.ui.components.MacroEditorDialog
 import com.example.ui.components.MemoryAndStoragePanel
 import com.example.ui.components.NetGlobePanel
 import com.example.ui.components.NewFileEntryDialog
@@ -82,7 +85,10 @@ import com.example.ui.viewmodel.EdexViewModel
 import java.util.Locale
 
 @Composable
-fun EdexDashboardScreen(viewModel: EdexViewModel) {
+fun EdexDashboardScreen(
+  viewModel: EdexViewModel,
+  onSignOut: () -> Unit = {},
+) {
   val palette = LocalEdexPalette.current
   val context = LocalContext.current
   val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
@@ -103,10 +109,16 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
   val inspectedFile by viewModel.inspectedFile.collectAsStateWithLifecycle()
   val showSettings by viewModel.showSettingsDialog.collectAsStateWithLifecycle()
   val showNewFile by viewModel.showNewFileDialog.collectAsStateWithLifecycle()
+  val selectedGlobeNodeId by viewModel.selectedGlobeNodeId.collectAsStateWithLifecycle()
+  val globeNodeFilter by viewModel.globeNodeFilter.collectAsStateWithLifecycle()
+  val editingMacroState by viewModel.editingMacroState.collectAsStateWithLifecycle()
+  val pendingMacroConfirm by viewModel.pendingMacroConfirm.collectAsStateWithLifecycle()
+  val cloudSyncState by viewModel.cloudSyncState.collectAsStateWithLifecycle()
 
+  val latestBackgroundMonitorEnabled by rememberUpdatedState(prefs.backgroundMonitorEnabled)
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
-      if (prefs.backgroundMonitorEnabled) {
+      if (latestBackgroundMonitorEnabled) {
         viewModel.startTelemetryService()
       }
     }
@@ -242,10 +254,15 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                   onClearTerminal = viewModel::clearActiveTerminal,
                   onInputChange = viewModel::updateTerminalInput,
                   onSubmitCommand = viewModel::submitCurrentInput,
-                  onQuickCommand = viewModel::runCommand,
                   onHistoryUp = viewModel::historyUp,
                   onHistoryDown = viewModel::historyDown,
                   modifier = Modifier.weight(1f).fillMaxWidth(),
+                  macroDecks = prefs.macroDecks,
+                  activeMacroDeckId = prefs.activeMacroDeckId,
+                  onSelectMacroDeck = viewModel::selectMacroDeck,
+                  onRunMacro = viewModel::triggerMacro,
+                  onAddMacro = viewModel::openAddMacroDialog,
+                  onEditMacro = viewModel::openEditMacroDialog,
                   onScrollToLatest = viewModel::onTerminalScrollToLatest,
                 )
                 AnimatedVisibility(visible = prefs.showKeyboard) {
@@ -275,6 +292,12 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                     NetGlobePanel(
                       telemetry = telemetry,
                       isServiceRunning = isServiceRunning,
+                      selectedNodeId = selectedGlobeNodeId,
+                      nodeFilter = globeNodeFilter,
+                      onSelectNode = viewModel::selectGlobeNode,
+                      onSelectFilter = viewModel::selectGlobeNodeFilter,
+                      onProbeNode = viewModel::probeGlobeNode,
+                      onRunDiagnostic = viewModel::runNetworkDiagnostic,
                       onGlobeTap = viewModel::onGlobeTap,
                       onGlobeReset = viewModel::onGlobeReset,
                     )
@@ -337,10 +360,15 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                       onClearTerminal = viewModel::clearActiveTerminal,
                       onInputChange = viewModel::updateTerminalInput,
                       onSubmitCommand = viewModel::submitCurrentInput,
-                      onQuickCommand = viewModel::runCommand,
                       onHistoryUp = viewModel::historyUp,
                       onHistoryDown = viewModel::historyDown,
                       modifier = Modifier.weight(1f).fillMaxWidth(),
+                      macroDecks = prefs.macroDecks,
+                      activeMacroDeckId = prefs.activeMacroDeckId,
+                      onSelectMacroDeck = viewModel::selectMacroDeck,
+                      onRunMacro = viewModel::triggerMacro,
+                      onAddMacro = viewModel::openAddMacroDialog,
+                      onEditMacro = viewModel::openEditMacroDialog,
                       onScrollToLatest = viewModel::onTerminalScrollToLatest,
                     )
                     AnimatedVisibility(visible = prefs.showKeyboard) {
@@ -409,6 +437,12 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
                         NetGlobePanel(
                           telemetry = telemetry,
                           isServiceRunning = isServiceRunning,
+                          selectedNodeId = selectedGlobeNodeId,
+                          nodeFilter = globeNodeFilter,
+                          onSelectNode = viewModel::selectGlobeNode,
+                          onSelectFilter = viewModel::selectGlobeNodeFilter,
+                          onProbeNode = viewModel::probeGlobeNode,
+                          onRunDiagnostic = viewModel::runNetworkDiagnostic,
                           onGlobeTap = viewModel::onGlobeTap,
                           onGlobeReset = viewModel::onGlobeReset,
                         )
@@ -480,12 +514,37 @@ fun EdexDashboardScreen(viewModel: EdexViewModel) {
         )
       }
 
+      editingMacroState?.let { editor ->
+        MacroEditorDialog(
+          initialMacro = editor.existingMacro,
+          deckName = editor.deckName,
+          onSave = viewModel::saveMacro,
+          onDelete = if (editor.existingMacro != null) viewModel::deleteEditingMacro else null,
+          onDismiss = viewModel::dismissMacroEditor,
+        )
+      }
+
+      pendingMacroConfirm?.let { pending ->
+        MacroConfirmDialog(
+          macro = pending.macro,
+          resolvedCommand = pending.resolvedCommand,
+          onConfirm = viewModel::confirmPendingMacro,
+          onDismiss = viewModel::dismissPendingMacro,
+        )
+      }
+
       if (showSettings) {
         SettingsDialog(
           preferences = prefs,
           isTelemetryServiceRunning = isServiceRunning,
+          cloudSyncState = cloudSyncState,
+          operatorDisplayName = viewModel.operatorDisplayName,
+          onSignOut = onSignOut,
           onSelectTheme = viewModel::setTheme,
           onSelectTelemetryTheme = viewModel::setTelemetryTheme,
+          onApplyHudProfile = viewModel::applyHudProfile,
+          onSaveCurrentHudProfile = viewModel::saveCurrentAsHudProfile,
+          onDeleteHudProfile = viewModel::deleteHudProfile,
           onToggleSound = viewModel::toggleSound,
           onToggleScanlines = viewModel::toggleScanlines,
           onToggleKeyboard = viewModel::toggleKeyboard,
@@ -544,7 +603,7 @@ private fun CompactTelemetryTicker(
 }
 
 @Composable
-private fun TickerChip(label: String, value: String, valueColor: androidx.compose.ui.graphics.Color) {
+private fun TickerChip(label: String, value: String, valueColor: Color) {
   val palette = LocalEdexPalette.current
   Row(verticalAlignment = Alignment.CenterVertically) {
     Text(
@@ -624,7 +683,7 @@ private fun HudNavItem(
       modifier
         .minimumInteractiveComponentSize()
         .background(
-          if (selected) palette.primaryDim.copy(alpha = 0.45f) else androidx.compose.ui.graphics.Color.Transparent,
+          if (selected) palette.primaryDim.copy(alpha = 0.45f) else Color.Transparent,
           CutCornerShape(6.dp),
         )
         .clickable(onClick = onClick)

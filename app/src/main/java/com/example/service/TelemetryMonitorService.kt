@@ -77,7 +77,6 @@ class TelemetryMonitorService : Service() {
     createNotificationChannel()
 
     val initial = telemetryRepo.collectSnapshot()
-    TelemetryHub.publish(initial)
     TelemetryHub.setServiceRunning(true)
     TelemetryHub.log(
       "DAEMON",
@@ -85,19 +84,35 @@ class TelemetryMonitorService : Service() {
     )
 
     val notification = buildNotification(initial)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      ServiceCompat.startForeground(
-        this,
-        NOTIFICATION_ID,
-        notification,
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+    val startedForeground =
+      runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+          )
+        } else {
+          startForeground(NOTIFICATION_ID, notification)
+        }
+      }
+    if (startedForeground.isFailure) {
+      val err = startedForeground.exceptionOrNull()
+      TelemetryHub.log(
+        "DAEMON",
+        "Foreground start rejected: ${err?.message ?: err?.javaClass?.simpleName}",
+        isError = true,
       )
-    } else {
-      startForeground(NOTIFICATION_ID, notification)
+      TelemetryHub.setServiceRunning(false)
+      stopSelf()
+      return
     }
 
+    synchronized(stateLock) { lastNotificationUpdateMs = System.currentTimeMillis() }
+    publishAndLog(initial, updateNotification = false)
     registerSystemObservers()
-    startTelemetryLoop()
+    startTelemetryLoop(initialDelay = true)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -107,7 +122,7 @@ class TelemetryMonitorService : Service() {
       return START_NOT_STICKY
     }
     if (pollingJob == null || pollingJob?.isActive != true) {
-      startTelemetryLoop()
+      startTelemetryLoop(initialDelay = false)
     }
     return START_STICKY
   }
@@ -125,10 +140,13 @@ class TelemetryMonitorService : Service() {
     super.onDestroy()
   }
 
-  private fun startTelemetryLoop() {
+  private fun startTelemetryLoop(initialDelay: Boolean = false) {
     pollingJob?.cancel()
     pollingJob =
       serviceScope.launch {
+        if (initialDelay) {
+          delay(1000L)
+        }
         while (isActive) {
           val snapshot = telemetryRepo.collectSnapshot()
           publishAndLog(snapshot)
@@ -151,9 +169,11 @@ class TelemetryMonitorService : Service() {
       }
   }
 
-  private fun publishAndLog(snapshot: SystemTelemetry) {
+  private fun publishAndLog(snapshot: SystemTelemetry, updateNotification: Boolean = true) {
     TelemetryHub.publish(snapshot)
-    maybeUpdateNotification(snapshot)
+    if (updateNotification) {
+      maybeUpdateNotification(snapshot)
+    }
 
     synchronized(stateLock) {
       if (lastBatteryPct != snapshot.batteryPercent || lastCharging != snapshot.batteryCharging) {
@@ -315,7 +335,14 @@ class TelemetryMonitorService : Service() {
 
     fun start(context: Context) {
       val intent = Intent(context, TelemetryMonitorService::class.java)
-      ContextCompat.startForegroundService(context, intent)
+      runCatching { ContextCompat.startForegroundService(context, intent) }
+        .onFailure { err ->
+          TelemetryHub.log(
+            "DAEMON",
+            "Unable to start telemetry service: ${err.message ?: err::class.java.simpleName}",
+            isError = true,
+          )
+        }
     }
 
     fun stop(context: Context) {

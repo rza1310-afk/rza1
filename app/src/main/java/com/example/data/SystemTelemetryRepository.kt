@@ -392,7 +392,9 @@ class SystemTelemetryRepository(private val context: Context) {
       }
     val packetsPerSec = (totalPktDelta / dtSec).toLong().coerceAtLeast(0L)
     val liveTrafficNow = totalPktDelta > 0L || totalByteDelta > 0L
-    if (liveTrafficNow && connected) {
+    if (!connected) {
+      lastPacketBurstAtMs = 0L
+    } else if (liveTrafficNow) {
       lastPacketBurstAtMs = nowMs
     }
     val withinHoldWindow =

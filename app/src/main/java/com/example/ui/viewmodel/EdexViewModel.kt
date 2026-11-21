@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.EdexPreferencesRepository
 import com.example.data.FilesystemRepository
+import com.example.data.FirestoreHudSyncRepository
 import com.example.data.HudSoundManager
 import com.example.data.SystemTelemetryRepository
 import com.example.data.TelemetryHub
@@ -14,21 +15,32 @@ import com.example.data.createWelcomeTerminalLines
 import com.example.model.EdexSectionTab
 import com.example.model.EdexUserPreferences
 import com.example.model.FileItem
+import com.example.model.GlobeNodeFilter
+import com.example.model.HudProfile
+import com.example.model.MacroAccentRole
+import com.example.model.NetworkConnectionNode
+import com.example.model.ShellMacro
 import com.example.model.SystemTelemetry
 import com.example.model.TerminalLine
 import com.example.model.TerminalLineType
 import com.example.model.TerminalTab
 import com.example.service.TelemetryMonitorService
+import com.example.ui.components.filterGlobeConnections
 import com.example.ui.theme.EdexThemeId
 import com.example.ui.theme.TelemetryThemeId
+import com.google.firebase.firestore.FirebaseFirestoreException
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -40,7 +52,20 @@ data class InspectedFileState(
   val isEditable: Boolean,
 )
 
-class EdexViewModel(application: Application) : AndroidViewModel(application) {
+sealed interface CloudSyncUiState {
+  data object LocalOnly : CloudSyncUiState
+  data object Syncing : CloudSyncUiState
+  data class Synced(val operatorName: String, val profileCount: Int, val deckCount: Int) :
+    CloudSyncUiState
+  data class Error(val message: String) : CloudSyncUiState
+}
+
+class EdexViewModel(
+  application: Application,
+  private val cloudSyncRepo: FirestoreHudSyncRepository? = null,
+  private val currentUserId: String? = null,
+  val operatorDisplayName: String = "OPERATOR",
+) : AndroidViewModel(application) {
   private val prefsRepo = EdexPreferencesRepository(application)
   private val telemetryRepo = SystemTelemetryRepository(application)
   private val filesystemRepo = FilesystemRepository(application)
@@ -109,6 +134,67 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
   private val _streamSystemLogs = MutableStateFlow(true)
   val streamSystemLogs: StateFlow<Boolean> = _streamSystemLogs.asStateFlow()
 
+  private val _selectedGlobeNodeId = MutableStateFlow<String?>(null)
+  val selectedGlobeNodeId: StateFlow<String?> = _selectedGlobeNodeId.asStateFlow()
+
+  private val _globeNodeFilter = MutableStateFlow(GlobeNodeFilter.ALL)
+  val globeNodeFilter: StateFlow<GlobeNodeFilter> = _globeNodeFilter.asStateFlow()
+
+  private val _editingMacroState = MutableStateFlow<MacroEditorState?>(null)
+  val editingMacroState: StateFlow<MacroEditorState?> = _editingMacroState.asStateFlow()
+
+  private val _pendingMacroConfirm = MutableStateFlow<PendingMacroConfirm?>(null)
+  val pendingMacroConfirm: StateFlow<PendingMacroConfirm?> = _pendingMacroConfirm.asStateFlow()
+
+  private val _cloudSyncError = MutableStateFlow<String?>(null)
+
+  val cloudSyncState: StateFlow<CloudSyncUiState> =
+    if (cloudSyncRepo == null || currentUserId.isNullOrBlank()) {
+      MutableStateFlow(CloudSyncUiState.LocalOnly).asStateFlow()
+    } else {
+      combine(
+        cloudSyncRepo.observeUserHudState(currentUserId),
+        cloudSyncRepo.observeHudProfiles(currentUserId),
+        cloudSyncRepo.observeMacroDecks(currentUserId),
+        _cloudSyncError,
+      ) { hudState, profiles, decks, lastMutationError ->
+        if (lastMutationError != null) {
+          CloudSyncUiState.Error(lastMutationError)
+        } else {
+          if (hudState != null) {
+            prefsRepo.applyCloudUserHudState(hudState)
+          }
+          val domainProfiles = profiles.mapNotNull { it.toDomain() }
+          if (domainProfiles.isNotEmpty()) {
+            prefsRepo.saveHudProfiles(domainProfiles)
+          }
+          val domainDecks = decks.mapNotNull { it.toDomain() }
+          if (domainDecks.isNotEmpty()) {
+            prefsRepo.saveMacroDecks(domainDecks)
+          }
+          CloudSyncUiState.Synced(
+            operatorName = hudState?.displayName ?: operatorDisplayName,
+            profileCount = domainProfiles.size,
+            deckCount = domainDecks.size,
+          )
+        }
+      }
+        .catch { error ->
+          val firestoreError =
+            generateSequence(error) { it.cause }
+              .filterIsInstance<FirebaseFirestoreException>()
+              .firstOrNull()
+          if (firestoreError == null && error is CancellationException) throw error
+          val rootError = firestoreError ?: error
+          emit(CloudSyncUiState.Error(rootError.message ?: "Cloud sync interrupted"))
+        }
+        .stateIn(
+          scope = viewModelScope,
+          started = SharingStarted.WhileSubscribed(5000L),
+          initialValue = CloudSyncUiState.Syncing,
+        )
+    }
+
   private var historyCursor: Int = -1
 
   init {
@@ -133,6 +219,17 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
 
     viewModelScope.launch {
       preferences.collect { prefs -> soundManager.enabled = prefs.soundEnabled }
+    }
+
+    val syncRepo = cloudSyncRepo
+    val uid = currentUserId
+    if (syncRepo != null && !uid.isNullOrBlank()) {
+      viewModelScope.launch {
+        val localPrefs = prefsRepo.preferences.first()
+        syncRepo.ensureUserSeeded(operatorDisplayName, localPrefs).onFailure { err ->
+          _cloudSyncError.value = err.localizedMessage ?: "Failed to initialize cloud sync"
+        }
+      }
     }
 
     viewModelScope.launch {
@@ -434,6 +531,234 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
     soundManager.playDataProcess()
   }
 
+  fun selectGlobeNode(nodeId: String?) {
+    soundManager.playUiSwitch()
+    _selectedGlobeNodeId.value = nodeId
+  }
+
+  fun selectGlobeNodeFilter(filter: GlobeNodeFilter) {
+    soundManager.playUiSwitch()
+    _globeNodeFilter.value = filter
+    val currentSelected = _selectedGlobeNodeId.value
+    if (currentSelected != null) {
+      val stillVisible =
+        filterGlobeConnections(telemetry.value.activeConnections, filter).any {
+          it.id == currentSelected
+        }
+      if (!stillVisible) {
+        _selectedGlobeNodeId.value = null
+      }
+    }
+  }
+
+  fun probeGlobeNode(node: NetworkConnectionNode) {
+    val host = extractHostFromEndpoint(node.endpoint)
+    _activeSection.value = EdexSectionTab.TERMINAL
+    runCommand("ping $host")
+  }
+
+  fun runNetworkDiagnostic() {
+    _activeSection.value = EdexSectionTab.TERMINAL
+    runCommand("ifconfig")
+  }
+
+  fun selectMacroDeck(deckId: String) {
+    soundManager.playUiSwitch()
+    viewModelScope.launch {
+      prefsRepo.setActiveMacroDeck(deckId)
+      syncCloudPrefsUpdate(preferences.value.copy(activeMacroDeckId = deckId))
+    }
+  }
+
+  fun resolveMacroCommand(template: String): String {
+    val selectedNode =
+      _selectedGlobeNodeId.value?.let { id ->
+        telemetry.value.activeConnections.firstOrNull { it.id == id }
+      }
+    val activeCwd =
+      _tabs.value.getOrNull(_activeTabIndex.value)?.cwd ?: filesystemRepo.workspaceRoot.absolutePath
+    return resolveMacroTokens(
+      template = template,
+      selectedNode = selectedNode,
+      gatewayIp = telemetry.value.gatewayIp,
+      cwd = activeCwd,
+      interfaceName = telemetry.value.interfaceName,
+    )
+  }
+
+  fun triggerMacro(macro: ShellMacro) {
+    val resolved = resolveMacroCommand(macro.commandTemplate)
+    if (resolved.isEmpty()) return
+    if (macro.requiresConfirm) {
+      soundManager.playUiSwitch()
+      _pendingMacroConfirm.value = PendingMacroConfirm(macro = macro, resolvedCommand = resolved)
+    } else {
+      runCommand(resolved)
+    }
+  }
+
+  fun confirmPendingMacro() {
+    val pending = _pendingMacroConfirm.value ?: return
+    _pendingMacroConfirm.value = null
+    runCommand(pending.resolvedCommand)
+  }
+
+  fun dismissPendingMacro() {
+    soundManager.playUiSwitch()
+    _pendingMacroConfirm.value = null
+  }
+
+  fun openAddMacroDialog() {
+    val prefs = preferences.value
+    val deck =
+      prefs.macroDecks.firstOrNull { it.id == prefs.activeMacroDeckId } ?: prefs.macroDecks.firstOrNull()
+        ?: return
+    soundManager.playUiSwitch()
+    _editingMacroState.value = MacroEditorState(deckId = deck.id, deckName = deck.name, existingMacro = null)
+  }
+
+  fun openEditMacroDialog(macro: ShellMacro) {
+    val prefs = preferences.value
+    val deck =
+      prefs.macroDecks.firstOrNull { d -> d.macros.any { it.id == macro.id } }
+        ?: prefs.macroDecks.firstOrNull { it.id == prefs.activeMacroDeckId }
+        ?: return
+    soundManager.playUiSwitch()
+    _editingMacroState.value = MacroEditorState(deckId = deck.id, deckName = deck.name, existingMacro = macro)
+  }
+
+  fun dismissMacroEditor() {
+    soundManager.playUiSwitch()
+    _editingMacroState.value = null
+  }
+
+  fun saveMacro(
+    label: String,
+    commandTemplate: String,
+    requiresConfirm: Boolean,
+    accentRole: MacroAccentRole,
+  ) {
+    val editor = _editingMacroState.value ?: return
+    val updated =
+      upsertMacroInDecks(
+        decks = preferences.value.macroDecks,
+        deckId = editor.deckId,
+        existingMacroId = editor.existingMacro?.id,
+        label = label,
+        commandTemplate = commandTemplate,
+        requiresConfirm = requiresConfirm,
+        accentRole = accentRole,
+        newIdGenerator = { "m_${lineIdGenerator.incrementAndGet()}" },
+      )
+    _editingMacroState.value = null
+    soundManager.playDataProcess()
+    viewModelScope.launch {
+      prefsRepo.saveMacroDecks(updated, editor.deckId)
+      val repo = cloudSyncRepo
+      if (repo != null && !currentUserId.isNullOrBlank()) {
+        val deckIdx = updated.indexOfFirst { it.id == editor.deckId }.coerceAtLeast(0)
+        val changedDeck = updated.getOrNull(deckIdx)
+        if (changedDeck != null) {
+          repo.saveMacroDeck(changedDeck, deckIdx).onFailure { err ->
+            _cloudSyncError.value = err.localizedMessage ?: "Failed to sync macro"
+          }
+        }
+      }
+    }
+  }
+
+  fun deleteEditingMacro() {
+    val editor = _editingMacroState.value ?: return
+    val existing = editor.existingMacro ?: return
+    val updated = deleteMacroFromDecks(preferences.value.macroDecks, editor.deckId, existing.id)
+    _editingMacroState.value = null
+    soundManager.playDataBurst()
+    viewModelScope.launch {
+      prefsRepo.saveMacroDecks(updated, editor.deckId)
+      val repo = cloudSyncRepo
+      if (repo != null && !currentUserId.isNullOrBlank()) {
+        val deckIdx = updated.indexOfFirst { it.id == editor.deckId }.coerceAtLeast(0)
+        val changedDeck = updated.getOrNull(deckIdx)
+        if (changedDeck != null) {
+          repo.saveMacroDeck(changedDeck, deckIdx).onFailure { err ->
+            _cloudSyncError.value = err.localizedMessage ?: "Failed to sync macro delete"
+          }
+        }
+      }
+    }
+  }
+
+  fun applyHudProfile(profile: HudProfile) {
+    soundManager.playDataBurst()
+    viewModelScope.launch {
+      prefsRepo.applyHudProfile(profile)
+      val nextPrefs =
+        preferences.value.copy(
+          themeId = profile.themeId,
+          telemetryThemeId = profile.telemetryThemeId,
+          glitchShaderEnabled = profile.glitchShaderEnabled,
+          glitchLoadThreshold = profile.glitchLoadThreshold,
+          scanlinesEnabled = profile.scanlinesEnabled,
+          soundEnabled = profile.soundEnabled,
+          activeMacroDeckId = profile.activeDeckId,
+          activeHudProfileId = profile.id,
+        )
+      syncCloudPrefsUpdate(nextPrefs)
+    }
+  }
+
+  fun saveCurrentAsHudProfile(name: String) {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return
+    val prefs = preferences.value
+    val newProfile =
+      createHudProfileSnapshot(
+        id = "prof_${lineIdGenerator.incrementAndGet()}_${System.currentTimeMillis()}",
+        name = trimmed,
+        prefs = prefs,
+      )
+    val updated = prefs.hudProfiles + newProfile
+    soundManager.playDataProcess()
+    viewModelScope.launch {
+      prefsRepo.saveHudProfiles(updated, activeProfileId = newProfile.id)
+      val repo = cloudSyncRepo
+      if (repo != null && !currentUserId.isNullOrBlank()) {
+        repo
+          .saveCustomHudProfile(newProfile)
+          .onSuccess { syncCloudPrefsUpdate(prefs.copy(activeHudProfileId = newProfile.id)) }
+          .onFailure { err ->
+            _cloudSyncError.value = err.localizedMessage ?: "Failed to save cloud profile"
+          }
+      }
+    }
+  }
+
+  fun deleteHudProfile(profile: HudProfile) {
+    if (profile.isBuiltIn) return
+    val currentPrefs = preferences.value
+    val updated = currentPrefs.hudProfiles.filterNot { it.id == profile.id }
+    soundManager.playDataBurst()
+    viewModelScope.launch {
+      prefsRepo.saveHudProfiles(updated)
+      val repo = cloudSyncRepo
+      if (repo != null && !currentUserId.isNullOrBlank()) {
+        repo
+          .deleteCustomHudProfile(profile.id)
+          .onSuccess {
+            if (currentPrefs.activeHudProfileId == profile.id) {
+              syncCloudPrefsUpdate(
+                currentPrefs.copy(activeHudProfileId = null),
+                clearActiveProfile = true,
+              )
+            }
+          }
+          .onFailure { err ->
+            _cloudSyncError.value = err.localizedMessage ?: "Failed to delete cloud profile"
+          }
+      }
+    }
+  }
+
   fun onFileFilterChanged() {
     soundManager.playUiSwitch()
   }
@@ -604,12 +929,24 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
 
   fun setTheme(themeId: EdexThemeId) {
     soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.setTheme(themeId) }
+    viewModelScope.launch {
+      prefsRepo.setTheme(themeId)
+      syncCloudPrefsUpdate(
+        preferences.value.copy(themeId = themeId, activeHudProfileId = null),
+        clearActiveProfile = true,
+      )
+    }
   }
 
   fun setTelemetryTheme(themeId: TelemetryThemeId) {
     soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.setTelemetryTheme(themeId) }
+    viewModelScope.launch {
+      prefsRepo.setTelemetryTheme(themeId)
+      syncCloudPrefsUpdate(
+        preferences.value.copy(telemetryThemeId = themeId, activeHudProfileId = null),
+        clearActiveProfile = true,
+      )
+    }
   }
 
   fun toggleSound() {
@@ -618,17 +955,26 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
       prefsRepo.setSoundEnabled(next)
       soundManager.enabled = next
       if (next) soundManager.playDataProcess()
+      syncCloudPrefsUpdate(preferences.value.copy(soundEnabled = next))
     }
   }
 
   fun toggleScanlines() {
     soundManager.playUiSwitch()
-    viewModelScope.launch { prefsRepo.setScanlinesEnabled(!preferences.value.scanlinesEnabled) }
+    viewModelScope.launch {
+      val next = !preferences.value.scanlinesEnabled
+      prefsRepo.setScanlinesEnabled(next)
+      syncCloudPrefsUpdate(preferences.value.copy(scanlinesEnabled = next))
+    }
   }
 
   fun toggleKeyboard() {
     soundManager.playUiSwitch()
-    viewModelScope.launch { prefsRepo.setShowKeyboard(!preferences.value.showKeyboard) }
+    viewModelScope.launch {
+      val next = !preferences.value.showKeyboard
+      prefsRepo.setShowKeyboard(next)
+      syncCloudPrefsUpdate(preferences.value.copy(showKeyboard = next))
+    }
   }
 
   fun startTelemetryService() {
@@ -660,12 +1006,32 @@ class EdexViewModel(application: Application) : AndroidViewModel(application) {
 
   fun toggleGlitchShader() {
     soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.setGlitchShaderEnabled(!preferences.value.glitchShaderEnabled) }
+    viewModelScope.launch {
+      val next = !preferences.value.glitchShaderEnabled
+      prefsRepo.setGlitchShaderEnabled(next)
+      syncCloudPrefsUpdate(preferences.value.copy(glitchShaderEnabled = next))
+    }
   }
 
   fun setGlitchLoadThreshold(threshold: Float) {
     soundManager.playDataBurst()
-    viewModelScope.launch { prefsRepo.setGlitchLoadThreshold(threshold) }
+    viewModelScope.launch {
+      val clamped = threshold.coerceIn(20f, 95f)
+      prefsRepo.setGlitchLoadThreshold(clamped)
+      syncCloudPrefsUpdate(preferences.value.copy(glitchLoadThreshold = clamped))
+    }
+  }
+
+  private suspend fun syncCloudPrefsUpdate(
+    prefs: EdexUserPreferences,
+    clearActiveProfile: Boolean = false,
+  ) {
+    val repo = cloudSyncRepo ?: return
+    if (currentUserId.isNullOrBlank()) return
+    _cloudSyncError.value = null
+    repo.syncPreferencesUpdate(prefs, clearActiveProfile = clearActiveProfile).onFailure { err ->
+      _cloudSyncError.value = err.localizedMessage ?: "Failed to sync HUD preferences"
+    }
   }
 
   private fun shortPath(path: String): String {

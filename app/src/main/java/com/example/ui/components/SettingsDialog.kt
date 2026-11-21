@@ -18,7 +18,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,17 +50,25 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.model.EdexUserPreferences
+import com.example.model.HudProfile
 import com.example.ui.theme.EdexPalettes
 import com.example.ui.theme.EdexThemeId
 import com.example.ui.theme.LocalEdexPalette
 import com.example.ui.theme.TelemetryThemeId
+import com.example.ui.viewmodel.CloudSyncUiState
 
 @Composable
 fun SettingsDialog(
   preferences: EdexUserPreferences,
   isTelemetryServiceRunning: Boolean,
+  cloudSyncState: CloudSyncUiState = CloudSyncUiState.LocalOnly,
+  operatorDisplayName: String = "OPERATOR",
+  onSignOut: () -> Unit = {},
   onSelectTheme: (EdexThemeId) -> Unit,
   onSelectTelemetryTheme: (TelemetryThemeId) -> Unit,
+  onApplyHudProfile: (HudProfile) -> Unit = {},
+  onSaveCurrentHudProfile: (String) -> Unit = {},
+  onDeleteHudProfile: (HudProfile) -> Unit = {},
   onToggleSound: () -> Unit,
   onToggleScanlines: () -> Unit,
   onToggleKeyboard: () -> Unit,
@@ -102,6 +115,20 @@ fun SettingsDialog(
             )
           }
         }
+
+        CloudSyncStatusCard(
+          cloudSyncState = cloudSyncState,
+          operatorDisplayName = operatorDisplayName,
+          onSignOut = onSignOut,
+        )
+
+        HudProfilesSection(
+          profiles = preferences.hudProfiles,
+          activeProfileId = preferences.activeHudProfileId,
+          onApplyProfile = onApplyHudProfile,
+          onSaveCurrentProfile = onSaveCurrentHudProfile,
+          onDeleteProfile = onDeleteHudProfile,
+        )
 
         Text(
           text = stringResource(R.string.settings_theme_label),
@@ -352,5 +379,109 @@ private fun SettingSwitchRow(
           uncheckedTrackColor = palette.surfaceElevated,
         ),
     )
+  }
+}
+
+@Composable
+private fun CloudSyncStatusCard(
+  cloudSyncState: CloudSyncUiState,
+  operatorDisplayName: String,
+  onSignOut: () -> Unit,
+) {
+  val palette = LocalEdexPalette.current
+  val isError = cloudSyncState is CloudSyncUiState.Error
+  val borderColor =
+    when (cloudSyncState) {
+      is CloudSyncUiState.Error -> palette.danger
+      is CloudSyncUiState.Synced -> palette.success
+      CloudSyncUiState.Syncing -> palette.primaryBright
+      CloudSyncUiState.LocalOnly -> palette.gridLine
+    }
+  val statusIcon =
+    when (cloudSyncState) {
+      is CloudSyncUiState.Error -> Icons.Filled.ErrorOutline
+      is CloudSyncUiState.Synced -> Icons.Filled.CloudDone
+      CloudSyncUiState.Syncing -> Icons.Filled.CloudSync
+      CloudSyncUiState.LocalOnly -> Icons.Filled.CloudOff
+    }
+  val statusText =
+    when (cloudSyncState) {
+      CloudSyncUiState.LocalOnly -> "LOCAL STORAGE MODE // SIGN IN REQUIRED FOR CLOUD SYNC"
+      CloudSyncUiState.Syncing -> "SYNCHRONIZING WITH FIRESTORE..."
+      is CloudSyncUiState.Synced ->
+        "SYNCED (${cloudSyncState.operatorName}) // ${cloudSyncState.profileCount} PROFILES, ${cloudSyncState.deckCount} DECKS"
+      is CloudSyncUiState.Error -> "SYNC FAULT // ${cloudSyncState.message}"
+    }
+
+  Surface(
+    modifier = Modifier.fillMaxWidth().testTag("cloud_sync_card"),
+    color = palette.background.copy(alpha = 0.85f),
+    border = BorderStroke(1.dp, borderColor),
+    shape = CutCornerShape(6.dp),
+  ) {
+    Column(
+      modifier = Modifier.padding(12.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.weight(1f),
+        ) {
+          Icon(
+            imageVector = statusIcon,
+            contentDescription = null,
+            tint = borderColor,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = stringResource(R.string.cloud_sync_label),
+            style = MaterialTheme.typography.labelMedium,
+            color = palette.primaryBright,
+          )
+        }
+        Text(
+          text = operatorDisplayName.uppercase(),
+          style = MaterialTheme.typography.labelSmall,
+          color = palette.textMuted,
+        )
+      }
+
+      Text(
+        text = statusText,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (isError) palette.danger else palette.textPrimary,
+      )
+
+      if (cloudSyncState !is CloudSyncUiState.LocalOnly) {
+        OutlinedButton(
+          onClick = onSignOut,
+          border = BorderStroke(1.dp, palette.danger),
+          shape = CutCornerShape(6.dp),
+          modifier =
+            Modifier.fillMaxWidth()
+              .minimumInteractiveComponentSize()
+              .testTag("sign_out_button"),
+        ) {
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.Logout,
+            contentDescription = null,
+            tint = palette.danger,
+            modifier = Modifier.size(18.dp),
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = stringResource(R.string.auth_sign_out),
+            color = palette.danger,
+            style = MaterialTheme.typography.labelMedium,
+          )
+        }
+      }
+    }
   }
 }

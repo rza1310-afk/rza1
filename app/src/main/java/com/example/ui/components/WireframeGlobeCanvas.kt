@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -82,11 +83,12 @@ fun WireframeGlobeCanvas(
       }
     }
 
+  val originNode = activeNodes.firstOrNull { it.isOrigin } ?: activeNodes.firstOrNull()
   val defaultYaw =
-    remember(activeNodes.firstOrNull()?.lonDeg) {
-      val origin = activeNodes.firstOrNull { it.isOrigin } ?: activeNodes.firstOrNull()
-      if (origin != null) (PI / 2.0 - origin.lonDeg * PI / 180.0).toFloat() else 0.45f
+    remember(originNode?.lonDeg) {
+      if (originNode != null) (PI / 2.0 - originNode.lonDeg * PI / 180.0).toFloat() else 0.45f
     }
+  val currentDefaultYaw by rememberUpdatedState(defaultYaw)
 
   var yawRad by remember { mutableFloatStateOf(defaultYaw) }
   var pitchRad by remember { mutableFloatStateOf(0.28f) }
@@ -177,14 +179,14 @@ fun WireframeGlobeCanvas(
             pitchRad = (pitchRad + dragAmount.y * 0.006f).coerceIn(-1.15f, 1.15f)
           }
         }
-        .pointerInput(defaultYaw) {
+        .pointerInput(Unit) {
           detectTapGestures(
             onTap = {
               autoRotate = !autoRotate
               onGlobeTap()
             },
             onDoubleTap = {
-              yawRad = defaultYaw
+              yawRad = currentDefaultYaw
               pitchRad = 0.28f
               autoRotate = true
               onGlobeReset()

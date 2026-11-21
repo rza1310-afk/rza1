@@ -61,6 +61,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.model.EdexDefaults
+import com.example.model.MacroDeck
+import com.example.model.ShellMacro
 import com.example.model.TerminalLine
 import com.example.model.TerminalLineType
 import com.example.model.TerminalTab
@@ -82,10 +85,15 @@ fun TerminalPanel(
   onClearTerminal: () -> Unit,
   onInputChange: (String) -> Unit,
   onSubmitCommand: () -> Unit,
-  onQuickCommand: (String) -> Unit,
   onHistoryUp: () -> Unit,
   onHistoryDown: () -> Unit,
   modifier: Modifier = Modifier,
+  macroDecks: List<MacroDeck> = EdexDefaults.defaultMacroDecks(),
+  activeMacroDeckId: String = "recon",
+  onSelectMacroDeck: (String) -> Unit = {},
+  onRunMacro: (ShellMacro) -> Unit = {},
+  onAddMacro: () -> Unit = {},
+  onEditMacro: (ShellMacro) -> Unit = {},
   onScrollToLatest: () -> Unit = {},
 ) {
   val palette = LocalEdexPalette.current
@@ -200,31 +208,15 @@ fun TerminalPanel(
 
       Spacer(modifier = Modifier.height(6.dp))
 
-      // Quick command macros
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        val quickCmds =
-          listOf("help", "neofetch", "logs", "ls", "ifconfig", "ping 1.1.1.1", "free", "ps", "df")
-        quickCmds.forEach { cmd ->
-          Surface(
-            modifier =
-              Modifier.testTag("quick_cmd_${cmd.replace(" ", "_").replace(".", "_")}")
-                .clickable { onQuickCommand(cmd) },
-            color = palette.surfaceElevated,
-            border = BorderStroke(1.dp, palette.gridLine),
-            shape = CutCornerShape(4.dp),
-          ) {
-            Text(
-              text = cmd,
-              style = MaterialTheme.typography.labelSmall,
-              color = palette.primary,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            )
-          }
-        }
-      }
+      // Programmable Macro Deck Bar
+      MacroDeckBar(
+        decks = macroDecks,
+        activeDeckId = activeMacroDeckId,
+        onSelectDeck = onSelectMacroDeck,
+        onRunMacro = onRunMacro,
+        onAddMacro = onAddMacro,
+        onEditMacro = onEditMacro,
+      )
 
       Spacer(modifier = Modifier.height(8.dp))
 

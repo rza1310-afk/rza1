@@ -34,4 +34,16 @@
     <string name="fgs_action_stop">STOP DAEMON</string>
     <string name="daemon_start">START FGS</string>
     <string name="daemon_stop">STOP FGS</string>
+    <string name="settings_profiles_label">SAVED HUD PROFILES</string>
+    <string name="profile_save_button">SAVE CURRENT</string>
+    <string name="macro_add_button">+ MACRO</string>
+    <string name="macro_confirm_title">CONFIRM MACRO EXECUTION</string>
+    <string name="globe_probe_ping">PROBE PING</string>
+    <string name="globe_copy_ip">COPY IP</string>
+    <string name="globe_net_diag">IFCONFIG</string>
+    <string name="auth_title">OPERATOR AUTHENTICATION // CLOUD LINK</string>
+    <string name="auth_subtitle">Authenticate with Google to unlock Firestore HUD profile and macro deck synchronization across devices.</string>
+    <string name="auth_sign_in_google">Sign in with Google</string>
+    <string name="auth_sign_out">SIGN OUT</string>
+    <string name="cloud_sync_label">FIREBASE CLOUD SYNC</string>
 </resources>

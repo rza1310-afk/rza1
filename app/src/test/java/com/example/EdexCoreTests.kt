@@ -5,14 +5,20 @@ import android.content.Context
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.EdexPreferencesRepository
 import com.example.data.FilesystemRepository
 import com.example.data.HudSoundEffect
 import com.example.data.HudSoundManager
@@ -20,16 +26,26 @@ import com.example.data.LowFreqPcmSynthesizer
 import com.example.data.SystemTelemetryRepository
 import com.example.data.TelemetryHub
 import com.example.data.TerminalEngine
+import com.example.model.EdexDefaults
 import com.example.model.EdexSectionTab
+import com.example.model.GlobeNodeFilter
+import com.example.model.MacroAccentRole
 import com.example.model.NetworkConnectionNode
 import com.example.model.SystemTelemetry
 import com.example.model.TerminalLineType
 import com.example.ui.components.NetGlobePanel
+import com.example.ui.components.NetworkGlobe
+import com.example.ui.components.SceneViewNetworkGlobe
+import com.example.ui.components.SceneViewRuntimeSupport
+import com.example.ui.components.filterGlobeConnections
 import com.example.ui.theme.EdexPalettes
 import com.example.ui.theme.EdexTheme
 import com.example.ui.theme.EdexThemeId
 import com.example.ui.theme.TelemetryThemeId
 import com.example.ui.viewmodel.EdexViewModel
+import com.example.ui.viewmodel.deleteMacroFromDecks
+import com.example.ui.viewmodel.resolveMacroTokens
+import com.example.ui.viewmodel.upsertMacroInDecks
 import java.io.File
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
@@ -385,5 +401,185 @@ class EdexCoreTests {
 
     composeRule.onNodeWithTag("globe_packet_status").assertIsDisplayed()
     composeRule.onNodeWithText("SVC PAUSED").assertIsDisplayed()
+  }
+
+  @Test
+  fun `net globe panel clears stale selection when transient socket node disappears and returns`() {
+    val originNode =
+      NetworkConnectionNode(
+        id = "origin_wlan0",
+        label = "WLAN0",
+        endpoint = "10.0.2.15",
+        protocol = "LOCAL",
+        state = "UP",
+        latDeg = 34.0,
+        lonDeg = -120.0,
+        isOrigin = true,
+      )
+    val transientNode =
+      NetworkConnectionNode(
+        id = "tcp_transient",
+        label = "TCP:443",
+        endpoint = "1.1.1.1:443",
+        protocol = "TCP",
+        state = "ESTAB",
+        latDeg = -33.8,
+        lonDeg = 151.2,
+      )
+
+    var currentTelemetry by
+      mutableStateOf(
+        SystemTelemetry(
+          networkConnected = true,
+          networkTransport = "WIFI // WLAN",
+          interfaceName = "wlan0",
+          ipAddress = "10.0.2.15",
+          activeConnections = listOf(originNode, transientNode),
+        )
+      )
+
+    composeRule.setContent {
+      EdexTheme(themeId = EdexThemeId.TRON) {
+        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+          NetGlobePanel(telemetry = currentTelemetry, isServiceRunning = true)
+        }
+      }
+    }
+
+    composeRule.onNodeWithTag("globe_active_connections").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("globe_node_chip_tcp_transient").performScrollTo().performClick()
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("globe_selected_node_detail").performScrollTo().assertIsDisplayed()
+
+    // Node disconnects -> detail bar must disappear and stale selection must be cleared
+    currentTelemetry = currentTelemetry.copy(activeConnections = listOf(originNode))
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("globe_selected_node_detail").assertDoesNotExist()
+
+    // Node later reconnects -> must not auto-resurrect stale selection
+    currentTelemetry = currentTelemetry.copy(activeConnections = listOf(originNode, transientNode))
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("globe_selected_node_detail").assertDoesNotExist()
+  }
+
+  @Test
+  fun `net globe panel displays offline state and ignores packet flags when disconnected`() {
+    val offlineTelemetry =
+      SystemTelemetry(
+        networkConnected = false,
+        networkTransport = "OFFLINE",
+        interfaceName = "lo",
+        ipAddress = "127.0.0.1",
+        packetsPerSec = 0L,
+        packetTrafficActive = false,
+        packetIntensity = 0f,
+      )
+
+    composeRule.setContent {
+      EdexTheme(themeId = EdexThemeId.TRON) {
+        NetGlobePanel(telemetry = offlineTelemetry, isServiceRunning = true)
+      }
+    }
+
+    composeRule.onNodeWithTag("globe_packet_status").assertIsDisplayed()
+    composeRule.onAllNodesWithText("OFFLINE").assertCountEquals(2)
+  }
+
+  @Test
+  fun `filterGlobeConnections and SceneViewNetworkGlobe fallback handle filters safely`() {
+    val origin =
+      NetworkConnectionNode("orig", "WLAN0", "10.0.0.5", "LOCAL", "UP", 37.0, -122.0, isOrigin = true)
+    val tcp = NetworkConnectionNode("tcp_1", "TCP:443", "1.1.1.1:443", "TCP", "ESTAB", 35.0, 139.0)
+    val gw = NetworkConnectionNode("gw_1", "GW", "10.0.0.1", "GW", "UP", 51.5, -0.1)
+    val dns = NetworkConnectionNode("dns_1", "DNS", "8.8.8.8", "DNS", "UP", 37.4, -122.1)
+    val all = listOf(origin, tcp, gw, dns)
+
+    assertEquals(4, filterGlobeConnections(all, GlobeNodeFilter.ALL).size)
+    val socketsOnly = filterGlobeConnections(all, GlobeNodeFilter.SOCKETS)
+    assertEquals(listOf("orig", "tcp_1"), socketsOnly.map { it.id })
+    val gwDnsOnly = filterGlobeConnections(all, GlobeNodeFilter.GW_DNS)
+    assertEquals(listOf("orig", "gw_1", "dns_1"), gwDnsOnly.map { it.id })
+
+    // On JVM/Robolectric, SceneViewRuntimeSupport reports false and falls back cleanly without JNI errors
+    assertFalse(SceneViewRuntimeSupport.isAvailable)
+
+    var tapped = false
+    var probedEndpoint: String? = null
+    val telemetry =
+      SystemTelemetry(
+        networkConnected = true,
+        networkTransport = "WIFI",
+        interfaceName = "wlan0",
+        ipAddress = "10.0.0.5",
+        activeConnections = all,
+      )
+
+    composeRule.setContent {
+      EdexTheme(themeId = EdexThemeId.TRON) {
+        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+          NetworkGlobe(
+            networkConnected = true,
+            connections = all,
+            packetTrafficActive = true,
+            onGlobeTap = { tapped = true },
+          )
+          SceneViewNetworkGlobe(
+            networkConnected = true,
+            connections = all,
+            packetTrafficActive = true,
+            onGlobeTap = { tapped = true },
+          )
+          NetGlobePanel(
+            telemetry = telemetry,
+            isServiceRunning = true,
+            onProbeNode = { probedEndpoint = it.endpoint },
+          )
+        }
+      }
+    }
+
+    composeRule.onNodeWithTag("globe_filter_bar").performScrollTo()
+    composeRule.onNodeWithTag("globe_filter_sockets").performClick()
+    composeRule.onNodeWithTag("globe_active_connections").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithText("ACTIVE NODES (2)").performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithTag("globe_node_chip_tcp_1").performScrollTo().performClick()
+    composeRule.onNodeWithTag("globe_selected_node_detail").performScrollTo()
+    composeRule.onNodeWithTag("globe_probe_ping_button").performClick()
+    assertEquals("1.1.1.1:443", probedEndpoint)
+  }
+
+  @Test
+  fun `preferences json serialization and macro helpers preserve decks and profiles`() {
+    val defaultDecks = EdexDefaults.defaultMacroDecks()
+    val encodedDecks = EdexPreferencesRepository.encodeMacroDecks(defaultDecks)
+    val decodedDecks = EdexPreferencesRepository.decodeMacroDecks(encodedDecks)
+    assertEquals(defaultDecks, decodedDecks)
+
+    val defaultProfiles = EdexDefaults.defaultHudProfiles()
+    val encodedProfiles = EdexPreferencesRepository.encodeHudProfiles(defaultProfiles)
+    val decodedProfiles = EdexPreferencesRepository.decodeHudProfiles(encodedProfiles)
+    assertEquals(defaultProfiles, decodedProfiles)
+
+    val updated =
+      upsertMacroInDecks(
+        decks = defaultDecks,
+        deckId = "recon",
+        existingMacroId = null,
+        label = "trace gw",
+        commandTemplate = "ping {selected_ip}",
+        requiresConfirm = true,
+        accentRole = MacroAccentRole.WARNING,
+        newIdGenerator = { "m_custom" },
+      )
+    assertTrue(updated.first { it.id == "recon" }.macros.any { it.id == "m_custom" })
+
+    val selected = NetworkConnectionNode("n1", "TCP", "9.9.9.9:443", "TCP", "ESTAB", 0.0, 0.0)
+    assertEquals(
+      "ping 9.9.9.9",
+      resolveMacroTokens("ping {selected_ip}", selected, "10.0.0.1", "/tmp", "wlan0"),
+    )
+
+    val pruned = deleteMacroFromDecks(updated, "recon", "m_custom")
+    assertFalse(pruned.first { it.id == "recon" }.macros.any { it.id == "m_custom" })
   }
 }

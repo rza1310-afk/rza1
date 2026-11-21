@@ -1,0 +1,193 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all reads and writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidHudTheme(themeId) {
+      return themeId in ['TRON', 'BLADE', 'MATRIX', 'APOLLO'];
+    }
+
+    function isValidTelemetryTheme(themeId) {
+      return themeId in ['SYNC_HUD', 'CYBERPUNK_NEON', 'MONOCHROME_TERMINAL', 'MILITARY_HUD'];
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidMacroItem(item) {
+      return item is map &&
+             item.keys().hasAll(['id', 'label', 'commandTemplate', 'requiresConfirm', 'accentRole']) &&
+             item.keys().hasOnly(['id', 'label', 'commandTemplate', 'requiresConfirm', 'accentRole']) &&
+             item.id is string && item.id.size() >= 1 && item.id.size() <= 64 &&
+             item.label is string && item.label.size() >= 1 && item.label.size() <= 40 &&
+             item.commandTemplate is string && item.commandTemplate.size() >= 1 && item.commandTemplate.size() <= 300 &&
+             item.requiresConfirm is bool &&
+             item.accentRole in ['PRIMARY', 'SUCCESS', 'WARNING', 'DANGER'];
+    }
+
+    // --- Validation Helpers ---
+    function isValidUserHudState(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             isValidHudTheme(data.themeId) &&
+             isValidTelemetryTheme(data.telemetryThemeId) &&
+             data.soundEnabled is bool &&
+             data.scanlinesEnabled is bool &&
+             data.showKeyboard is bool &&
+             data.glitchShaderEnabled is bool &&
+             data.glitchLoadThreshold is number && data.glitchLoadThreshold >= 20 && data.glitchLoadThreshold <= 95 &&
+             data.activeMacroDeckId is string && data.activeMacroDeckId.size() >= 1 && data.activeMacroDeckId.size() <= 64 &&
+             (!('activeHudProfileId' in data) || (data.activeHudProfileId is string && data.activeHudProfileId.size() >= 1 && data.activeHudProfileId.size() <= 64)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCloudHudProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 50 &&
+             isValidHudTheme(data.themeId) &&
+             isValidTelemetryTheme(data.telemetryThemeId) &&
+             data.glitchShaderEnabled is bool &&
+             data.glitchLoadThreshold is number && data.glitchLoadThreshold >= 20 && data.glitchLoadThreshold <= 95 &&
+             data.scanlinesEnabled is bool &&
+             data.soundEnabled is bool &&
+             data.activeDeckId is string && data.activeDeckId.size() >= 1 && data.activeDeckId.size() <= 64 &&
+             data.builtIn is bool &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCloudMacroDeck(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 40 &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 100 &&
+             data.macros is list && data.macros.size() <= 30 &&
+             (data.macros.size() == 0 || isValidMacroItem(data.macros[0])) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    // --- Collection Rules ---
+    match /users/{userId} {
+      allow get, list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayName', 'themeId', 'telemetryThemeId',
+                         'soundEnabled', 'scanlinesEnabled', 'showKeyboard',
+                         'glitchShaderEnabled', 'glitchLoadThreshold',
+                         'activeMacroDeckId', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'themeId', 'telemetryThemeId',
+                         'soundEnabled', 'scanlinesEnabled', 'showKeyboard',
+                         'glitchShaderEnabled', 'glitchLoadThreshold',
+                         'activeMacroDeckId', 'activeHudProfileId',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserHudState(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserHudState(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'themeId', 'telemetryThemeId',
+                         'soundEnabled', 'scanlinesEnabled', 'showKeyboard',
+                         'glitchShaderEnabled', 'glitchLoadThreshold',
+                         'activeMacroDeckId', 'activeHudProfileId', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /hud_profiles/{profileId} {
+        allow get: if isOwner(userId) && isValidId(profileId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(profileId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'name', 'themeId', 'telemetryThemeId',
+                           'glitchShaderEnabled', 'glitchLoadThreshold',
+                           'scanlinesEnabled', 'soundEnabled', 'activeDeckId',
+                           'builtIn', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'themeId', 'telemetryThemeId',
+                           'glitchShaderEnabled', 'glitchLoadThreshold',
+                           'scanlinesEnabled', 'soundEnabled', 'activeDeckId',
+                           'builtIn', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCloudHudProfile(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(profileId) &&
+                         isValidCloudHudProfile(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'themeId', 'telemetryThemeId',
+                           'glitchShaderEnabled', 'glitchLoadThreshold',
+                           'scanlinesEnabled', 'soundEnabled', 'activeDeckId',
+                           'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(profileId);
+      }
+
+      match /macro_decks/{deckId} {
+        allow get: if isOwner(userId) && isValidId(deckId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(deckId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'name', 'sortOrder', 'macros', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'sortOrder', 'macros', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCloudMacroDeck(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(deckId) &&
+                         isValidCloudMacroDeck(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'sortOrder', 'macros', 'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(deckId);
+      }
+    }
+  }
+}

@@ -1,0 +1,190 @@
+{
+  "entities": {
+    "UserHudState": {
+      "title": "UserHudState",
+      "description": "Cloud-synced HUD visual, audio, shader, and active deck configuration scoped to an authenticated Google operator.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase Auth UID of the owner."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Operator display label (non-PII)."
+        },
+        "themeId": {
+          "type": "string",
+          "enum": ["TRON", "BLADE", "MATRIX", "APOLLO"]
+        },
+        "telemetryThemeId": {
+          "type": "string",
+          "enum": ["SYNC_HUD", "CYBERPUNK_NEON", "MONOCHROME_TERMINAL", "MILITARY_HUD"]
+        },
+        "soundEnabled": {
+          "type": "boolean"
+        },
+        "scanlinesEnabled": {
+          "type": "boolean"
+        },
+        "showKeyboard": {
+          "type": "boolean"
+        },
+        "glitchShaderEnabled": {
+          "type": "boolean"
+        },
+        "glitchLoadThreshold": {
+          "type": "number"
+        },
+        "activeMacroDeckId": {
+          "type": "string"
+        },
+        "activeHudProfileId": {
+          "type": "string",
+          "description": "Optional active saved HUD profile ID; omitted when customized."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp() on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp() on updates."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "themeId",
+        "telemetryThemeId",
+        "soundEnabled",
+        "scanlinesEnabled",
+        "showKeyboard",
+        "glitchShaderEnabled",
+        "glitchLoadThreshold",
+        "activeMacroDeckId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudHudProfile": {
+      "title": "CloudHudProfile",
+      "description": "Saved HUD preset profile synced per user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "themeId": {
+          "type": "string",
+          "enum": ["TRON", "BLADE", "MATRIX", "APOLLO"]
+        },
+        "telemetryThemeId": {
+          "type": "string",
+          "enum": ["SYNC_HUD", "CYBERPUNK_NEON", "MONOCHROME_TERMINAL", "MILITARY_HUD"]
+        },
+        "glitchShaderEnabled": {
+          "type": "boolean"
+        },
+        "glitchLoadThreshold": {
+          "type": "number"
+        },
+        "scanlinesEnabled": {
+          "type": "boolean"
+        },
+        "soundEnabled": {
+          "type": "boolean"
+        },
+        "activeDeckId": {
+          "type": "string"
+        },
+        "builtIn": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "themeId",
+        "telemetryThemeId",
+        "glitchShaderEnabled",
+        "glitchLoadThreshold",
+        "scanlinesEnabled",
+        "soundEnabled",
+        "activeDeckId",
+        "builtIn",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudMacroDeck": {
+      "title": "CloudMacroDeck",
+      "description": "Programmable shell macro deck synced per user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "integer"
+        },
+        "macros": {
+          "type": "array",
+          "description": "Bounded list of up to 30 shell macro definitions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "sortOrder",
+        "macros",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserHudState"
+      },
+      "description": "Authenticated operator's synced HUD state and active deck/profile selection."
+    },
+    "/users/{userId}/hud_profiles/{profileId}": {
+      "schema": {
+        "$ref": "#/entities/CloudHudProfile"
+      },
+      "description": "User's saved HUD visual & shader preset profiles."
+    },
+    "/users/{userId}/macro_decks/{deckId}": {
+      "schema": {
+        "$ref": "#/entities/CloudMacroDeck"
+      },
+      "description": "User's programmable shell macro decks."
+    }
+  }
+}
